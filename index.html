@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Discoteca</title>
+<!-- Receptor web de Google Cast de Discoteca: el audio y, encima, los colores de la portada que respiran y la letra
+     palabra a palabra. Lo que llega por la red se pinta solo como texto (nunca HTML) y los colores se validan. -->
+<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+<style>
+  :root { --c1: #3a2a6b; --c2: #0d6e7a; --c3: #8a2d5a; --tinta: #ffffff; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #07070b; color: var(--tinta);
+    font-family: -apple-system, "SF Pro Display", "Helvetica Neue", Roboto, sans-serif; }
+  #fondo { position: fixed; inset: -20%; filter: blur(80px) saturate(140%);
+    background:
+      radial-gradient(40% 50% at 20% 30%, var(--c1), transparent 70%),
+      radial-gradient(45% 55% at 80% 25%, var(--c2), transparent 70%),
+      radial-gradient(50% 50% at 55% 85%, var(--c3), transparent 70%);
+    animation: deriva 26s ease-in-out infinite alternate; transition: background 1.4s ease; }
+  @keyframes deriva { from { transform: rotate(0deg) scale(1); } to { transform: rotate(14deg) scale(1.12); } }
+  #velo { position: fixed; inset: 0; background: radial-gradient(120% 90% at 50% 50%, transparent 40%, rgba(0,0,0,.55)); }
+  main { position: relative; display: grid; grid-template-columns: 32vw 1fr; gap: 6vw; align-items: center;
+    height: 100%; padding: 0 7vw; }
+  .tarjeta { padding: 3.2vh 2.4vw; border-radius: 3vh; background: rgba(255,255,255,.10);
+    border: 1px solid rgba(255,255,255,.22); backdrop-filter: blur(24px); box-shadow: 0 4vh 10vh rgba(0,0,0,.35); }
+  #titulo { font-size: 5.2vh; font-weight: 700; line-height: 1.1; }
+  #artista { margin-top: 1.4vh; font-size: 3vh; opacity: .78; }
+  #album { margin-top: .6vh; font-size: 2.4vh; opacity: .55; }
+  #letra { display: flex; flex-direction: column; gap: 2.2vh; mask-image: linear-gradient(transparent, #000 18%, #000 82%, transparent); }
+  .linea { font-size: 4.2vh; font-weight: 600; opacity: .32; transition: opacity .35s ease, transform .35s ease; transform-origin: left center; }
+  .linea.activa { opacity: 1; transform: scale(1.06); }
+  .palabra { transition: color .12s linear, text-shadow .2s ease; color: rgba(255,255,255,.45); }
+  .palabra.dicha { color: #fff; text-shadow: 0 0 2.4vh rgba(255,255,255,.45); }
+  #sinletra { font-size: 3vh; opacity: .5; }
+  @media (prefers-reduced-motion: reduce) { #fondo { animation: none; } }
+</style>
+</head>
+<body>
+<div id="fondo"></div><div id="velo"></div>
+<audio id="audio"></audio>
+<main>
+  <section class="tarjeta">
+    <div id="titulo">Discoteca</div>
+    <div id="artista"></div>
+    <div id="album"></div>
+  </section>
+  <section id="letra"><div id="sinletra">Esperando a la Mac…</div></section>
+</main>
+<script type="module">
+import { parseLRC, lineaEn, coloresSeguros, palabrasDichas } from "./letra.js";
+
+const ESPACIO = "urn:x-cast:local.musica.discoteca";
+const VISIBLES = 5;
+let lineas = [];
+let reloj = { t: 0, en: performance.now(), sonando: false };
+let mostrada = -2;
+
+function texto(id, valor) { document.getElementById(id).textContent = typeof valor === "string" ? valor.slice(0, 300) : ""; }
+
+function colores(lista) {
+  const validos = coloresSeguros(lista);
+  ["--c1", "--c2", "--c3"].forEach((nombre, i) => { if (validos[i]) document.documentElement.style.setProperty(nombre, validos[i]); });
+}
+
+function cancion(datos) {
+  texto("titulo", datos.titulo); texto("artista", datos.artista); texto("album", datos.album);
+  colores(datos.colores);
+  lineas = parseLRC(datos.lrc);
+  mostrada = -2;
+  pintar(true);
+}
+
+/** El segundo que suena: el del reproductor de Cast si existe; si no, el último aviso de la Mac más lo transcurrido. */
+function ahora() {
+  const audio = document.getElementById("audio");
+  if (window.reproductor && audio && !audio.paused && audio.currentTime > 0) return audio.currentTime;
+  return reloj.t + (reloj.sonando ? (performance.now() - reloj.en) / 1000 : 0);
+}
+
+function pintar(forzar = false) {
+  const zona = document.getElementById("letra");
+  const t = ahora();
+  const i = lineaEn(lineas, t + 0.2);
+  if (lineas.length === 0) {
+    if (forzar) { zona.replaceChildren(); const n = document.createElement("div"); n.id = "sinletra"; n.textContent = "Sin letra sincronizada"; zona.append(n); }
+    return;
+  }
+  if (i !== mostrada || forzar) {
+    mostrada = i;
+    zona.replaceChildren();
+    // La línea que suena siempre en el segundo puesto (fuera del degradado de arriba).
+    const desde = i - 1;
+    for (let k = desde; k < desde + VISIBLES; k++) {
+      if (k < 0 || k >= lineas.length) {
+        const hueco = document.createElement("div");
+        hueco.className = "linea";
+        hueco.textContent = "\u00a0";
+        zona.append(hueco);
+        continue;
+      }
+      const div = document.createElement("div");
+      div.className = "linea" + (k === i ? " activa" : "");
+      const linea = lineas[k];
+      if (linea.palabras.length && k === i) {
+        linea.palabras.forEach((p, n) => {
+          const s = document.createElement("span");
+          s.className = "palabra"; s.dataset.t = String(p.t); s.textContent = (n ? " " : "") + p.texto;
+          div.append(s);
+        });
+      } else {
+        div.textContent = linea.texto || "· · ·";
+      }
+      zona.append(div);
+    }
+  }
+  const dichas = palabrasDichas(lineas[i], t);
+  document.querySelectorAll(".linea.activa .palabra").forEach((s, n) => s.classList.toggle("dicha", n < dichas));
+}
+
+function bucle() { pintar(); requestAnimationFrame(bucle);
+// Por si el navegador frena requestAnimationFrame (ventana oculta, equipos lentos): la letra no se queda parada.
+setInterval(() => pintar(), 120); }
+requestAnimationFrame(bucle);
+
+function mensaje(datos) {
+  if (!datos || typeof datos !== "object") return;
+  if (datos.type === "cancion") cancion(datos);
+  if (datos.type === "tiempo" && Number.isFinite(datos.t)) reloj = { t: datos.t, en: performance.now(), sonando: !!datos.sonando };
+}
+
+const prueba = new URLSearchParams(location.search).has("prueba");
+if (!prueba && window.cast && cast.framework) {
+  const contexto = cast.framework.CastReceiverContext.getInstance();
+  const reproductor = contexto.getPlayerManager();
+  reproductor.setMediaElement(document.getElementById("audio"));
+  window.reproductor = reproductor;
+  contexto.addCustomMessageListener(ESPACIO, (evento) => mensaje(typeof evento.data === "string" ? JSON.parse(evento.data) : evento.data));
+  // El título, el artista y la portada llegan también en el LOAD normal (por si la Mac no manda los suyos).
+  reproductor.setMessageInterceptor(cast.framework.messages.MessageType.LOAD, (peticion) => {
+    const m = peticion.media && peticion.media.metadata;
+    if (m) { texto("titulo", m.title); texto("artista", m.artist); texto("album", m.albumName); }
+    return peticion;
+  });
+  contexto.start({ statusText: "Discoteca", maxInactivity: 3600 });
+} else if (prueba) {
+  // Fuera de un Cast (un navegador): datos de prueba para revisar el aspecto, sin audio.
+  cancion({ titulo: "Canción de prueba", artista: "Discoteca", album: "Receptor",
+    colores: ["#6a3cff", "#00b3a4", "#ff3d7f"],
+    lrc: "[00:00.50]<00:00.50>Así <00:01.00>se <00:01.40>ve <00:01.80>la <00:02.20>letra\n[00:04.00]en el proyector\n[00:07.00]palabra a palabra\n[00:10.00]con los colores de la portada" });
+  reloj = { t: 0, en: performance.now(), sonando: true };
+}
+</script>
+</body>
+</html>
